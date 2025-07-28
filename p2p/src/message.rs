@@ -1077,7 +1077,7 @@ mod test {
             );
             assert_eq!(version_msg.timestamp, 1548554224);
             assert_eq!(version_msg.nonce, 13952548347456104954);
-            assert_eq!(version_msg.user_agent, "/Satoshi:0.17.1/");
+            assert_eq!(version_msg.user_agent.to_string(), "/Satoshi:0.17.1/");
             assert_eq!(version_msg.start_height, 560275);
             assert!(version_msg.relay);
         } else {
@@ -1115,7 +1115,7 @@ mod test {
             );
             assert_eq!(version_msg.timestamp, 1548554224);
             assert_eq!(version_msg.nonce, 13952548347456104954);
-            assert_eq!(version_msg.user_agent, "/Satoshi:0.17.1/");
+            assert_eq!(version_msg.user_agent.to_string(), "/Satoshi:0.17.1/");
             assert_eq!(version_msg.start_height, 560275);
             assert!(version_msg.relay);
         } else {
@@ -1161,7 +1161,7 @@ mod test {
             );
             assert_eq!(version_msg.timestamp, 1548554224);
             assert_eq!(version_msg.nonce, 13952548347456104954);
-            assert_eq!(version_msg.user_agent, "/Satoshi:0.17.1/");
+            assert_eq!(version_msg.user_agent.to_string(), "/Satoshi:0.17.1/");
             assert_eq!(version_msg.start_height, 560275);
             assert!(version_msg.relay);
         } else {
