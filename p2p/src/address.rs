@@ -35,7 +35,7 @@ impl Address {
         };
         Address { address, port, services }
     }
-    
+
     /// Build an useless address that cannot be connected to. One may find this desirable if it is
     /// known the data will be ignored by the recipient.
     pub const fn useless() -> Address {
