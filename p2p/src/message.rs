@@ -26,7 +26,8 @@ use units::FeeRate;
 use crate::address::{AddrV2Message, Address};
 use crate::consensus::{impl_consensus_encoding, impl_vec_wrapper};
 use crate::{
-    bip152, message_blockdata, message_bloom, message_compact_blocks, message_filter, message_network, Magic
+    bip152, message_blockdata, message_bloom, message_compact_blocks, message_filter,
+    message_network, Magic,
 };
 
 /// The maximum number of [`super::message_blockdata::Inventory`] items in an `inv` message.
