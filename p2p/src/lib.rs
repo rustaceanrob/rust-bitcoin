@@ -119,9 +119,7 @@ encoding::encoder_newtype! {
 impl encoding::Encodable for ProtocolVersion {
     type Encoder<'e> = ProtocolVersionEncoder;
     fn encoder(&self) -> Self::Encoder<'_> {
-        ProtocolVersionEncoder(encoding::ArrayEncoder::without_length_prefix(
-            self.0.to_le_bytes(),
-        ))
+        ProtocolVersionEncoder(encoding::ArrayEncoder::without_length_prefix(self.0.to_le_bytes()))
     }
 }
 
@@ -344,9 +342,7 @@ encoding::encoder_newtype! {
 impl encoding::Encodable for ServiceFlags {
     type Encoder<'e> = ServiceFlagsEncoder;
     fn encoder(&self) -> Self::Encoder<'_> {
-        ServiceFlagsEncoder(encoding::ArrayEncoder::without_length_prefix(
-            self.0.to_le_bytes(),
-        ))
+        ServiceFlagsEncoder(encoding::ArrayEncoder::without_length_prefix(self.0.to_le_bytes()))
     }
 }
 
