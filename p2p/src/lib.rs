@@ -60,7 +60,7 @@ pub use self::{
 #[cfg(feature = "std")]
 #[rustfmt::skip]
 #[doc(inline)]
-pub use self::{address::Address, message::CheckedData};
+pub use self::address::Address;
 
 #[rustfmt::skip]                // Keep public re-exports separate.
 #[doc(no_inline)]

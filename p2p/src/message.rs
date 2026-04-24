@@ -8,27 +8,22 @@
 use alloc::borrow::{Cow, ToOwned};
 use alloc::boxed::Box;
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
-use core::{cmp, fmt, mem};
+use core::{fmt, mem};
 
 #[cfg(feature = "arbitrary")]
 use arbitrary::{Arbitrary, Unstructured};
-use bitcoin::consensus::encode::{self, Decodable, Encodable, ReadExt, WriteExt};
 use encoding::{
     self, ArrayDecoder, ArrayEncoder, BytesEncoder, CompactSizeEncoder, Decoder2, Encoder2,
     SliceEncoder, VecDecoder,
 };
 use hashes::{sha256d, HashEngine};
-use internals::ToU64 as _;
-use io::{self, BufRead, Read, Write};
 use primitives::block::{self, HeaderDecoder, HeaderEncoder};
 use primitives::transaction;
 use units::FeeRate;
 
 use self::error::V1NetworkMessageDecoderErrorInner;
 use crate::address::{AddrV1Message, AddrV2Message};
-use crate::consensus::{impl_consensus_encoding, impl_vec_wrapper};
 use crate::merkle_tree::MerkleBlock;
 use crate::{
     bip152, message_blockdata, message_bloom, message_compact_blocks, message_filter,
@@ -118,33 +113,6 @@ impl fmt::Display for CommandString {
 
 impl AsRef<str> for CommandString {
     fn as_ref(&self) -> &str { self.0.as_ref() }
-}
-
-impl Encodable for CommandString {
-    #[inline]
-    fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, io::Error> {
-        let mut rawbytes = [0u8; 12];
-        let strbytes = self.0.as_bytes();
-        debug_assert!(strbytes.len() <= 12);
-        rawbytes[..strbytes.len()].copy_from_slice(strbytes);
-        rawbytes.consensus_encode(w)
-    }
-}
-
-impl Decodable for CommandString {
-    #[inline]
-    fn consensus_decode<R: BufRead + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
-        let rawbytes: [u8; 12] = Decodable::consensus_decode(r)?;
-
-        // Find the last non-null byte and trim null padding from the end
-        let trimmed = &rawbytes[..rawbytes.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1)];
-
-        if !trimmed.is_ascii() {
-            return Err(crate::consensus::parse_failed_error("Command string must be ASCII"));
-        }
-
-        Ok(Self(Cow::Owned(unsafe { String::from_utf8_unchecked(trimmed.to_vec()) })))
-    }
 }
 
 impl encoding::Encodable for CommandString {
@@ -322,8 +290,6 @@ impl encoding::Decodable for V1MessageHeader {
     }
 }
 
-impl_consensus_encoding!(V1MessageHeader, magic, command, length, checksum);
-
 /// A Network message using the v2 p2p protocol defined in BIP-0324.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct V2NetworkMessage {
@@ -488,10 +454,6 @@ impl encoding::Decodable for AddrV2Payload {
     fn decoder() -> Self::Decoder { AddrV2PayloadDecoder(VecDecoder::new()) }
 }
 
-impl_vec_wrapper!(InventoryPayload, message_blockdata::Inventory);
-impl_vec_wrapper!(AddrPayload, AddrV1Message);
-impl_vec_wrapper!(AddrV2Payload, AddrV2Message);
-
 /// The `feefilter` message, wrapper around [`FeeRate`] for P2P wire format encoding.
 ///
 /// This message is used to inform peers about the minimum fee rate for transactions
@@ -515,48 +477,6 @@ impl From<FeeRate> for FeeFilter {
 
 impl From<FeeFilter> for FeeRate {
     fn from(filter: FeeFilter) -> Self { filter.0 }
-}
-
-impl bitcoin::consensus::encode::Encodable for FeeFilter {
-    fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, io::Error> {
-        use encoding::Encoder;
-        let mut encoder = encoding::Encodable::encoder(self);
-        loop {
-            w.write_all(encoder.current_chunk())?;
-            if !encoder.advance() {
-                break;
-            }
-        }
-        Ok(8)
-    }
-}
-
-impl bitcoin::consensus::encode::Decodable for FeeFilter {
-    fn consensus_decode<R: BufRead + ?Sized>(
-        r: &mut R,
-    ) -> Result<Self, bitcoin::consensus::encode::Error> {
-        use encoding::Decoder;
-
-        let mut decoder = <Self as encoding::Decodable>::decoder();
-        let mut buffer = [0u8; 8];
-
-        r.read_exact(&mut buffer)?;
-
-        let mut slice = &buffer[..];
-        decoder.push_bytes(&mut slice).map_err(|_| {
-            bitcoin::consensus::encode::Error::Io(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "insufficient data for FeeFilter",
-            ))
-        })?;
-
-        decoder.end().map_err(|_| {
-            bitcoin::consensus::encode::Error::Io(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "insufficient data for FeeFilter",
-            ))
-        })
-    }
 }
 
 encoding::encoder_newtype_exact! {
@@ -940,68 +860,11 @@ impl V2NetworkMessage {
     pub fn command(&self) -> CommandString { self.payload.command() }
 }
 
-impl Encodable for NetworkMessage {
-    fn consensus_encode<W: Write + ?Sized>(&self, writer: &mut W) -> Result<usize, io::Error> {
-        match self {
-            Self::Version(ref dat) => dat.consensus_encode(writer),
-            Self::Addr(ref dat) => dat.consensus_encode(writer),
-            Self::Inv(ref dat) => dat.consensus_encode(writer),
-            Self::GetData(ref dat) => dat.consensus_encode(writer),
-            Self::NotFound(ref dat) => dat.consensus_encode(writer),
-            Self::GetBlocks(ref dat) => dat.consensus_encode(writer),
-            Self::GetHeaders(ref dat) => dat.consensus_encode(writer),
-            Self::Tx(ref dat) => dat.consensus_encode(writer),
-            Self::Block(ref dat) => dat.consensus_encode(writer),
-            Self::Headers(ref dat) => dat.consensus_encode(writer),
-            Self::Ping(ref dat) => dat.0.consensus_encode(writer),
-            Self::Pong(ref dat) => dat.0.consensus_encode(writer),
-            Self::MerkleBlock(ref dat) => dat.consensus_encode(writer),
-            Self::FilterLoad(ref dat) => dat.consensus_encode(writer),
-            Self::FilterAdd(ref dat) => dat.consensus_encode(writer),
-            Self::GetCFilters(ref dat) => dat.consensus_encode(writer),
-            Self::CFilter(ref dat) => dat.consensus_encode(writer),
-            Self::GetCFHeaders(ref dat) => dat.consensus_encode(writer),
-            Self::CFHeaders(ref dat) => dat.consensus_encode(writer),
-            Self::GetCFCheckpt(ref dat) => dat.consensus_encode(writer),
-            Self::CFCheckpt(ref dat) => dat.consensus_encode(writer),
-            Self::SendCmpct(ref dat) => dat.consensus_encode(writer),
-            Self::CmpctBlock(ref dat) => dat.consensus_encode(writer),
-            Self::GetBlockTxn(ref dat) => dat.consensus_encode(writer),
-            Self::BlockTxn(ref dat) => dat.consensus_encode(writer),
-            Self::Alert(ref dat) => dat.consensus_encode(writer),
-            Self::Reject(ref dat) => dat.consensus_encode(writer),
-            Self::FeeFilter(ref dat) => dat.consensus_encode(writer),
-            Self::AddrV2(ref dat) => dat.consensus_encode(writer),
-            Self::Verack
-            | Self::SendHeaders
-            | Self::MemPool
-            | Self::GetAddr
-            | Self::WtxidRelay
-            | Self::FilterClear
-            | Self::SendAddrV2 => Ok(0),
-            // Don't use consensus_encode so as not to add a length suffix.
-            Self::Unknown { payload: ref data, .. } => writer.write(data),
-        }
-    }
-}
-
 impl encoding::Encodable for NetworkMessage {
     type Encoder<'e> = NetworkMessageEncoder<'e>;
 
     #[inline]
     fn encoder(&self) -> Self::Encoder<'_> { NetworkMessageEncoder::new(self) }
-}
-
-impl Encodable for V1NetworkMessage {
-    fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, io::Error> {
-        let mut len = 0;
-        len += self.magic.consensus_encode(w)?;
-        len += self.command().consensus_encode(w)?;
-        len += self.payload_len.consensus_encode(w)?;
-        len += self.checksum.consensus_encode(w)?;
-        len += self.payload().consensus_encode(w)?;
-        Ok(len)
-    }
 }
 
 /// Encoder for [`NetworkMessage`]
@@ -1682,24 +1545,6 @@ fn v2_command_byte(payload: &NetworkMessage) -> (u8, Option<CommandString>) {
     }
 }
 
-impl Encodable for V2NetworkMessage {
-    fn consensus_encode<W: Write + ?Sized>(&self, writer: &mut W) -> Result<usize, io::Error> {
-        // A subset of message types are optimized to only use one byte to encode the command.
-        // Non-optimized message types use the zero-byte flag and the following twelve bytes to encode the command.
-        let (command_byte, full_command) = v2_command_byte(&self.payload);
-
-        let mut len = command_byte.consensus_encode(writer)?;
-        if let Some(cmd) = full_command {
-            len += cmd.consensus_encode(writer)?;
-        }
-
-        // Encode the payload.
-        len += self.payload.consensus_encode(writer)?;
-
-        Ok(len)
-    }
-}
-
 /// Network encoded [`Header`](primitives::block::Header) with associated byte for the length of
 /// transactions that follow, which is currently always zero.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1765,20 +1610,6 @@ impl encoding::Decodable for NetworkHeader {
     }
 }
 
-impl Decodable for NetworkHeader {
-    fn consensus_decode<R: BufRead + ?Sized>(reader: &mut R) -> Result<Self, encode::Error> {
-        Ok(Self { header: Decodable::consensus_decode(reader)?, length: reader.read_u8()? })
-    }
-}
-
-impl Encodable for NetworkHeader {
-    fn consensus_encode<W: Write + ?Sized>(&self, writer: &mut W) -> Result<usize, io::Error> {
-        let mut size = self.header.consensus_encode(writer)?;
-        size += self.length.consensus_encode(writer)?;
-        Ok(size)
-    }
-}
-
 /// A list of bitcoin block headers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeadersMessage(pub Vec<NetworkHeader>);
@@ -1797,8 +1628,6 @@ impl HeadersMessage {
         self.0.into_iter().map(|network| network.header)
     }
 }
-
-impl_vec_wrapper!(HeadersMessage, NetworkHeader);
 
 encoding::encoder_newtype! {
     /// The encoder type for a [`HeadersMessage`].
@@ -1846,185 +1675,6 @@ impl encoding::Decodable for HeadersMessage {
     type Decoder = HeadersMessageDecoder;
 
     fn decoder() -> Self::Decoder { HeadersMessageDecoder(VecDecoder::new()) }
-}
-
-impl Decodable for V1NetworkMessage {
-    fn consensus_decode_from_finite_reader<R: BufRead + ?Sized>(
-        r: &mut R,
-    ) -> Result<Self, encode::Error> {
-        let magic = Decodable::consensus_decode_from_finite_reader(r)?;
-        let cmd = CommandString::consensus_decode_from_finite_reader(r)?;
-        let checked_data = CheckedData::consensus_decode_from_finite_reader(r)?;
-        let checksum = checked_data.checksum();
-        let raw_payload = checked_data.into_data();
-        let payload_len = raw_payload.len() as u32;
-
-        let mut mem_d = raw_payload.as_slice();
-        let payload = match &cmd.0[..] {
-            "version" =>
-                NetworkMessage::Version(Decodable::consensus_decode_from_finite_reader(&mut mem_d)?),
-            "verack" => NetworkMessage::Verack,
-            "addr" =>
-                NetworkMessage::Addr(Decodable::consensus_decode_from_finite_reader(&mut mem_d)?),
-            "inv" =>
-                NetworkMessage::Inv(Decodable::consensus_decode_from_finite_reader(&mut mem_d)?),
-            "getdata" =>
-                NetworkMessage::GetData(Decodable::consensus_decode_from_finite_reader(&mut mem_d)?),
-            "notfound" => NetworkMessage::NotFound(Decodable::consensus_decode_from_finite_reader(
-                &mut mem_d,
-            )?),
-            "getblocks" => NetworkMessage::GetBlocks(
-                Decodable::consensus_decode_from_finite_reader(&mut mem_d)?,
-            ),
-            "getheaders" => NetworkMessage::GetHeaders(
-                Decodable::consensus_decode_from_finite_reader(&mut mem_d)?,
-            ),
-            "mempool" => NetworkMessage::MemPool,
-            "block" =>
-                NetworkMessage::Block(Decodable::consensus_decode_from_finite_reader(&mut mem_d)?),
-            "headers" => NetworkMessage::Headers(
-                HeadersMessage::consensus_decode_from_finite_reader(&mut mem_d)?,
-            ),
-            "sendheaders" => NetworkMessage::SendHeaders,
-            "getaddr" => NetworkMessage::GetAddr,
-            "ping" => NetworkMessage::Ping(Ping(Decodable::consensus_decode_from_finite_reader(
-                &mut mem_d,
-            )?)),
-            "pong" => NetworkMessage::Pong(Pong(Decodable::consensus_decode_from_finite_reader(
-                &mut mem_d,
-            )?)),
-            "merkleblock" => NetworkMessage::MerkleBlock(
-                Decodable::consensus_decode_from_finite_reader(&mut mem_d)?,
-            ),
-            "filterload" => NetworkMessage::FilterLoad(
-                Decodable::consensus_decode_from_finite_reader(&mut mem_d)?,
-            ),
-            "filteradd" => NetworkMessage::FilterAdd(
-                Decodable::consensus_decode_from_finite_reader(&mut mem_d)?,
-            ),
-            "filterclear" => NetworkMessage::FilterClear,
-            "tx" => NetworkMessage::Tx(Decodable::consensus_decode_from_finite_reader(&mut mem_d)?),
-            "getcfilters" => NetworkMessage::GetCFilters(
-                Decodable::consensus_decode_from_finite_reader(&mut mem_d)?,
-            ),
-            "cfilter" =>
-                NetworkMessage::CFilter(Decodable::consensus_decode_from_finite_reader(&mut mem_d)?),
-            "getcfheaders" => NetworkMessage::GetCFHeaders(
-                Decodable::consensus_decode_from_finite_reader(&mut mem_d)?,
-            ),
-            "cfheaders" => NetworkMessage::CFHeaders(
-                Decodable::consensus_decode_from_finite_reader(&mut mem_d)?,
-            ),
-            "getcfcheckpt" => NetworkMessage::GetCFCheckpt(
-                Decodable::consensus_decode_from_finite_reader(&mut mem_d)?,
-            ),
-            "cfcheckpt" => NetworkMessage::CFCheckpt(
-                Decodable::consensus_decode_from_finite_reader(&mut mem_d)?,
-            ),
-            "reject" =>
-                NetworkMessage::Reject(Decodable::consensus_decode_from_finite_reader(&mut mem_d)?),
-            "alert" =>
-                NetworkMessage::Alert(Decodable::consensus_decode_from_finite_reader(&mut mem_d)?),
-            "feefilter" => NetworkMessage::FeeFilter(
-                FeeFilter::consensus_decode_from_finite_reader(&mut mem_d)?,
-            ),
-            "sendcmpct" => NetworkMessage::SendCmpct(
-                Decodable::consensus_decode_from_finite_reader(&mut mem_d)?,
-            ),
-            "cmpctblock" => NetworkMessage::CmpctBlock(
-                Decodable::consensus_decode_from_finite_reader(&mut mem_d)?,
-            ),
-            "getblocktxn" => NetworkMessage::GetBlockTxn(
-                Decodable::consensus_decode_from_finite_reader(&mut mem_d)?,
-            ),
-            "blocktxn" => NetworkMessage::BlockTxn(Decodable::consensus_decode_from_finite_reader(
-                &mut mem_d,
-            )?),
-            "wtxidrelay" => NetworkMessage::WtxidRelay,
-            "addrv2" =>
-                NetworkMessage::AddrV2(Decodable::consensus_decode_from_finite_reader(&mut mem_d)?),
-            "sendaddrv2" => NetworkMessage::SendAddrV2,
-            _ => NetworkMessage::Unknown { command: cmd, payload: raw_payload },
-        };
-        Ok(Self { magic, payload, payload_len, checksum })
-    }
-
-    #[inline]
-    fn consensus_decode<R: BufRead + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
-        Self::consensus_decode_from_finite_reader(&mut r.take(MAX_MSG_SIZE.to_u64()))
-    }
-}
-
-impl Decodable for V2NetworkMessage {
-    fn consensus_decode_from_finite_reader<R: BufRead + ?Sized>(
-        r: &mut R,
-    ) -> Result<Self, encode::Error> {
-        let short_id: u8 = Decodable::consensus_decode_from_finite_reader(r)?;
-        let payload = match short_id {
-            0u8 => {
-                // Full command encoding.
-                let cmd = CommandString::consensus_decode_from_finite_reader(r)?;
-                match &cmd.0[..] {
-                    "version" =>
-                        NetworkMessage::Version(Decodable::consensus_decode_from_finite_reader(r)?),
-                    "verack" => NetworkMessage::Verack,
-                    "sendheaders" => NetworkMessage::SendHeaders,
-                    "getaddr" => NetworkMessage::GetAddr,
-                    "wtxidrelay" => NetworkMessage::WtxidRelay,
-                    "sendaddrv2" => NetworkMessage::SendAddrV2,
-                    "alert" =>
-                        NetworkMessage::Alert(Decodable::consensus_decode_from_finite_reader(r)?),
-                    "reject" =>
-                        NetworkMessage::Reject(Decodable::consensus_decode_from_finite_reader(r)?),
-                    _ => NetworkMessage::Unknown {
-                        command: cmd,
-                        payload: Vec::consensus_decode_from_finite_reader(r)?,
-                    },
-                }
-            }
-            1u8 => NetworkMessage::Addr(Decodable::consensus_decode_from_finite_reader(r)?),
-            2u8 => NetworkMessage::Block(Decodable::consensus_decode_from_finite_reader(r)?),
-            3u8 => NetworkMessage::BlockTxn(Decodable::consensus_decode_from_finite_reader(r)?),
-            4u8 => NetworkMessage::CmpctBlock(Decodable::consensus_decode_from_finite_reader(r)?),
-            5u8 => NetworkMessage::FeeFilter(FeeFilter::consensus_decode_from_finite_reader(r)?),
-            6u8 => NetworkMessage::FilterAdd(Decodable::consensus_decode_from_finite_reader(r)?),
-            7u8 => NetworkMessage::FilterClear,
-            8u8 => NetworkMessage::FilterLoad(Decodable::consensus_decode_from_finite_reader(r)?),
-            9u8 => NetworkMessage::GetBlocks(Decodable::consensus_decode_from_finite_reader(r)?),
-            10u8 => NetworkMessage::GetBlockTxn(Decodable::consensus_decode_from_finite_reader(r)?),
-            11u8 => NetworkMessage::GetData(Decodable::consensus_decode_from_finite_reader(r)?),
-            12u8 => NetworkMessage::GetHeaders(Decodable::consensus_decode_from_finite_reader(r)?),
-            13u8 =>
-                NetworkMessage::Headers(HeadersMessage::consensus_decode_from_finite_reader(r)?),
-            14u8 => NetworkMessage::Inv(Decodable::consensus_decode_from_finite_reader(r)?),
-            15u8 => NetworkMessage::MemPool,
-            16u8 => NetworkMessage::MerkleBlock(Decodable::consensus_decode_from_finite_reader(r)?),
-            17u8 => NetworkMessage::NotFound(Decodable::consensus_decode_from_finite_reader(r)?),
-            18u8 => NetworkMessage::Ping(Ping(Decodable::consensus_decode_from_finite_reader(r)?)),
-            19u8 => NetworkMessage::Pong(Pong(Decodable::consensus_decode_from_finite_reader(r)?)),
-            20u8 => NetworkMessage::SendCmpct(Decodable::consensus_decode_from_finite_reader(r)?),
-            21u8 => NetworkMessage::Tx(Decodable::consensus_decode_from_finite_reader(r)?),
-            22u8 => NetworkMessage::GetCFilters(Decodable::consensus_decode_from_finite_reader(r)?),
-            23u8 => NetworkMessage::CFilter(Decodable::consensus_decode_from_finite_reader(r)?),
-            24u8 =>
-                NetworkMessage::GetCFHeaders(Decodable::consensus_decode_from_finite_reader(r)?),
-            25u8 => NetworkMessage::CFHeaders(Decodable::consensus_decode_from_finite_reader(r)?),
-            26u8 =>
-                NetworkMessage::GetCFCheckpt(Decodable::consensus_decode_from_finite_reader(r)?),
-            27u8 => NetworkMessage::CFCheckpt(Decodable::consensus_decode_from_finite_reader(r)?),
-            28u8 => NetworkMessage::AddrV2(Decodable::consensus_decode_from_finite_reader(r)?),
-            _ =>
-                return Err(encode::Error::Parse(encode::ParseError::ParseFailed(
-                    "Unknown short ID",
-                ))),
-        };
-        Ok(Self { payload })
-    }
-
-    #[inline]
-    fn consensus_decode<R: BufRead + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
-        Self::consensus_decode_from_finite_reader(&mut r.take(MAX_MSG_SIZE.to_u64()))
-    }
 }
 
 // State machine for decoding a [`V2NetworkMessage`].
@@ -2233,96 +1883,6 @@ impl encoding::Decodable for V2NetworkMessage {
             state: V2NetworkMessageDecoderState::ShortId(encoding::ArrayDecoder::new()),
         }
     }
-}
-
-/// Data and a 4-byte checksum.
-#[derive(PartialEq, Eq, Clone, Debug)]
-pub struct CheckedData {
-    data: Vec<u8>,
-    checksum: [u8; 4],
-}
-
-impl CheckedData {
-    /// Constructs a new `CheckedData` computing the checksum of given data.
-    pub fn new(data: Vec<u8>) -> Self {
-        let hash = sha256d::hash(data.as_slice()).to_byte_array();
-        let checksum = [hash[0], hash[1], hash[2], hash[3]];
-        Self { data, checksum }
-    }
-
-    /// Returns a reference to the raw data without the checksum.
-    pub fn data(&self) -> &[u8] { &self.data }
-
-    /// Returns the raw data without the checksum.
-    pub fn into_data(self) -> Vec<u8> { self.data }
-
-    /// Returns the checksum of the data.
-    pub fn checksum(&self) -> [u8; 4] { self.checksum }
-}
-
-impl Encodable for CheckedData {
-    #[inline]
-    fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, io::Error> {
-        u32::try_from(self.data.len())
-            .expect("network message use u32 as length")
-            .consensus_encode(w)?;
-        self.checksum().consensus_encode(w)?;
-        Ok(8 + w.emit_slice(&self.data)?)
-    }
-}
-
-impl Decodable for CheckedData {
-    #[inline]
-    fn consensus_decode_from_finite_reader<R: BufRead + ?Sized>(
-        r: &mut R,
-    ) -> Result<Self, encode::Error> {
-        let len = u32::consensus_decode_from_finite_reader(r)? as usize;
-
-        let checksum = <[u8; 4]>::consensus_decode_from_finite_reader(r)?;
-        let opts = ReadBytesFromFiniteReaderOpts { len, chunk_size: encode::MAX_VEC_SIZE };
-        let data = read_bytes_from_finite_reader(r, opts)?;
-        let hash = sha256d::hash(data.as_slice()).to_byte_array();
-        let expected_checksum = [hash[0], hash[1], hash[2], hash[3]];
-        if expected_checksum == checksum {
-            Ok(Self { data, checksum })
-        } else {
-            Err(encode::ParseError::InvalidChecksum {
-                expected: expected_checksum,
-                actual: checksum,
-            }
-            .into())
-        }
-    }
-}
-
-struct ReadBytesFromFiniteReaderOpts {
-    len: usize,
-    chunk_size: usize,
-}
-
-/// Read `opts.len` bytes from reader, where `opts.len` could potentially be malicious.
-///
-/// This function relies on reader being bound in amount of data
-/// it returns for OOM protection. See [`Decodable::consensus_decode_from_finite_reader`].
-#[inline]
-fn read_bytes_from_finite_reader<D: Read + ?Sized>(
-    d: &mut D,
-    mut opts: ReadBytesFromFiniteReaderOpts,
-) -> Result<Vec<u8>, encode::Error> {
-    let mut ret = vec![];
-
-    assert_ne!(opts.chunk_size, 0);
-
-    while opts.len > 0 {
-        let chunk_start = ret.len();
-        let chunk_size = cmp::min(opts.len, opts.chunk_size);
-        let chunk_end = chunk_start + chunk_size;
-        ret.resize(chunk_end, 0u8);
-        d.read_slice(&mut ret[chunk_start..chunk_end])?;
-        opts.len -= chunk_size;
-    }
-
-    Ok(ret)
 }
 
 /// Does a double-SHA256 on `data` and returns the first 4 bytes.
