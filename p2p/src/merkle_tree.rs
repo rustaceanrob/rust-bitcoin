@@ -14,13 +14,11 @@ use alloc::vec::Vec;
 
 #[cfg(feature = "arbitrary")]
 use arbitrary::{Arbitrary, Unstructured};
-use bitcoin::consensus::encode::{self, Decodable, Encodable, ReadExt, WriteExt, MAX_VEC_SIZE};
 use encoding::{
     ArrayDecoder, ArrayEncoder, ByteVecDecoder, CompactSizeEncoder, Decoder2, Decoder3, Encoder2,
     Encoder3, SliceEncoder, VecDecoder,
 };
 use internals::ToU64 as _;
-use io::{BufRead, Write};
 use primitives::block::{self, Block, Checked, HeaderDecoder, HeaderEncoder};
 use primitives::merkle_tree::TxMerkleNode;
 use primitives::transaction::{Transaction, Txid};
@@ -172,19 +170,6 @@ impl encoding::Decodable for MerkleBlock {
     type Decoder = MerkleBlockDecoder;
     fn decoder() -> Self::Decoder {
         MerkleBlockDecoder(Decoder2::new(block::Header::decoder(), PartialMerkleTree::decoder()))
-    }
-}
-
-impl Encodable for MerkleBlock {
-    fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, io::Error> {
-        let len = self.header.consensus_encode(w)? + self.txn.consensus_encode(w)?;
-        Ok(len)
-    }
-}
-
-impl Decodable for MerkleBlock {
-    fn consensus_decode<R: BufRead + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
-        Ok(Self { header: Decodable::consensus_decode(r)?, txn: Decodable::consensus_decode(r)? })
     }
 }
 
@@ -569,51 +554,6 @@ impl encoding::Decodable for PartialMerkleTree {
             VecDecoder::new(),
             ByteVecDecoder::new(),
         ))
-    }
-}
-
-impl Encodable for PartialMerkleTree {
-    fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, io::Error> {
-        let mut ret = self.num_transactions.consensus_encode(w)?;
-        ret += self.hashes.consensus_encode(w)?;
-
-        let nb_bytes_for_bits = self.bits.len().div_ceil(8);
-        ret += w.emit_compact_size(nb_bytes_for_bits)?;
-        for chunk in self.bits.chunks(8) {
-            let mut byte = 0u8;
-            for (i, bit) in chunk.iter().enumerate() {
-                byte |= u8::from(*bit) << i;
-            }
-            ret += byte.consensus_encode(w)?;
-        }
-        Ok(ret)
-    }
-}
-
-impl Decodable for PartialMerkleTree {
-    fn consensus_decode_from_finite_reader<R: BufRead + ?Sized>(
-        r: &mut R,
-    ) -> Result<Self, encode::Error> {
-        let num_transactions: u32 = Decodable::consensus_decode(r)?;
-        let hashes: Vec<TxMerkleNode> = Decodable::consensus_decode(r)?;
-
-        let nb_bytes_for_bits = r.read_compact_size()? as usize;
-        if nb_bytes_for_bits > MAX_VEC_SIZE {
-            return Err(encode::ParseError::OversizedVectorAllocation {
-                requested: nb_bytes_for_bits,
-                max: MAX_VEC_SIZE,
-            }
-            .into());
-        }
-        let mut bits = vec![false; nb_bytes_for_bits * 8];
-        for chunk in bits.chunks_mut(8) {
-            let byte = u8::consensus_decode(r)?;
-            for (i, bit) in chunk.iter_mut().enumerate() {
-                *bit = (byte & (1 << i)) != 0;
-            }
-        }
-
-        Ok(Self { num_transactions, bits, hashes })
     }
 }
 
