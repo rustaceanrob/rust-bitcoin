@@ -7,8 +7,6 @@
 use arbitrary::{Arbitrary, Unstructured};
 use encoding::{ArrayDecoder, ArrayEncoder, Decoder2, Encoder2};
 
-use crate::consensus::impl_consensus_encoding;
-
 #[rustfmt::skip]                // Keep public re-exports separate.
 #[doc(no_inline)]
 pub use self::error::SendCmpctDecoderError;
@@ -72,8 +70,6 @@ impl encoding::Decodable for SendCmpct {
         SendCmpctDecoder(Decoder2::new(ArrayDecoder::new(), ArrayDecoder::new()))
     }
 }
-
-impl_consensus_encoding!(SendCmpct, send_compact, version);
 
 /// Error types for [`SendCmpct`] messages.
 pub mod error {
