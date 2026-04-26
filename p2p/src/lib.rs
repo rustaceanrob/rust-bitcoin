@@ -43,10 +43,8 @@ use core::{fmt, ops};
 
 #[cfg(feature = "arbitrary")]
 use arbitrary::{Arbitrary, Unstructured};
-use bitcoin::consensus::encode::{self, Decodable, Encodable};
 use encoding::{ArrayDecoder, ArrayEncoder};
 use internals::impl_to_hex_from_lower_hex;
-use io::{BufRead, Write};
 use network::{Network, TestnetVersion};
 
 #[rustfmt::skip]
@@ -112,20 +110,6 @@ impl ProtocolVersion {
 
 impl From<ProtocolVersion> for u32 {
     fn from(version: ProtocolVersion) -> Self { version.0 }
-}
-
-impl Encodable for ProtocolVersion {
-    #[inline]
-    fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, io::Error> {
-        self.0.consensus_encode(w)
-    }
-}
-
-impl Decodable for ProtocolVersion {
-    #[inline]
-    fn consensus_decode<R: BufRead + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
-        Ok(Self(Decodable::consensus_decode(r)?))
-    }
 }
 
 encoding::encoder_newtype_exact! {
@@ -323,20 +307,6 @@ impl ops::BitXorAssign for ServiceFlags {
     fn bitxor_assign(&mut self, rhs: Self) { let _ = self.remove(rhs); }
 }
 
-impl Encodable for ServiceFlags {
-    #[inline]
-    fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, io::Error> {
-        self.0.consensus_encode(w)
-    }
-}
-
-impl Decodable for ServiceFlags {
-    #[inline]
-    fn consensus_decode<R: BufRead + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
-        Ok(Self(Decodable::consensus_decode(r)?))
-    }
-}
-
 encoding::encoder_newtype_exact! {
     /// The encoder for the [`ServiceFlags`] type.
     #[derive(Debug, Clone)]
@@ -476,18 +446,6 @@ impl fmt::UpperHex for Magic {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         hex_unstable::fmt_hex_exact!(f, 4, &self.0, hex_unstable::Case::Upper)?;
         Ok(())
-    }
-}
-
-impl Encodable for Magic {
-    fn consensus_encode<W: Write + ?Sized>(&self, writer: &mut W) -> Result<usize, io::Error> {
-        self.0.consensus_encode(writer)
-    }
-}
-
-impl Decodable for Magic {
-    fn consensus_decode<R: BufRead + ?Sized>(reader: &mut R) -> Result<Self, encode::Error> {
-        Ok(Self(Decodable::consensus_decode(reader)?))
     }
 }
 
