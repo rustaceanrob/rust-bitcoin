@@ -12,16 +12,13 @@ use alloc::vec::Vec;
 
 #[cfg(feature = "arbitrary")]
 use arbitrary::{Arbitrary, Unstructured};
-use bitcoin::consensus::{encode, Decodable, Encodable, ReadExt, WriteExt};
 use encoding::{
     ArrayDecoder, ArrayEncoder, ByteVecDecoder, BytesEncoder, CompactSizeEncoder, Decoder4,
     Encoder2, Encoder4,
 };
 use hashes::sha256d;
-use io::{BufRead, Write};
 
 use crate::address::{Address, AddressDecoder};
-use crate::consensus::{impl_consensus_encoding, impl_vec_wrapper};
 use crate::{ProtocolVersion, ServiceFlags};
 
 #[rustfmt::skip]                // Keep public re-exports separate.
@@ -216,19 +213,6 @@ type VersionMessageInnerDecoder = encoding::Decoder2<
 #[derive(Debug, Clone)]
 pub struct VersionMessageDecoder(VersionMessageInnerDecoder);
 
-impl_consensus_encoding!(
-    VersionMessage,
-    version,
-    services,
-    timestamp,
-    receiver,
-    sender,
-    nonce,
-    user_agent,
-    start_height,
-    relay
-);
-
 /// A bitcoin user agent defined by BIP-0014. The user agent is sent in the version message when a
 /// connection between two peers is established. It is intended to advertise client software in a
 /// well-defined format.
@@ -288,8 +272,6 @@ impl encoding::Decodable for UserAgent {
 
     fn decoder() -> Self::Decoder { UserAgentDecoder(UserAgentInnerDecoder::new()) }
 }
-
-impl_consensus_encoding!(UserAgent, user_agent);
 
 impl UserAgent {
     const MAX_USER_AGENT_LEN: usize = 256;
@@ -509,29 +491,6 @@ impl encoding::Decodable for RejectReason {
     fn decoder() -> Self::Decoder { RejectReasonDecoder(ArrayDecoder::new()) }
 }
 
-impl Encodable for RejectReason {
-    fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, io::Error> {
-        w.write_all(&[*self as u8])?;
-        Ok(1)
-    }
-}
-
-impl Decodable for RejectReason {
-    fn consensus_decode<R: BufRead + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
-        Ok(match r.read_u8()? {
-            0x01 => Self::Malformed,
-            0x10 => Self::Invalid,
-            0x11 => Self::Obsolete,
-            0x12 => Self::Duplicate,
-            0x40 => Self::NonStandard,
-            0x41 => Self::Dust,
-            0x42 => Self::Fee,
-            0x43 => Self::Checkpoint,
-            _ => return Err(crate::consensus::parse_failed_error("unknown reject code")),
-        })
-    }
-}
-
 /// Reject message might be sent by peers rejecting one of our messages
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct Reject {
@@ -623,8 +582,6 @@ impl encoding::Decodable for Reject {
     }
 }
 
-impl_consensus_encoding!(Reject, message, ccode, reason, hash);
-
 /// A deprecated message type that was used to notify users of system changes. Due to a number of
 /// vulnerabilities, alerts are no longer used. A final alert was sent as of Bitcoin Core 0.14.0,
 /// and is sent to any node that is advertising a potentially vulnerable protocol version.
@@ -694,8 +651,6 @@ impl encoding::Decodable for Alert {
 
     fn decoder() -> Self::Decoder { AlertDecoder(AlertInnerDecoder::new()) }
 }
-
-impl_vec_wrapper!(Alert, Vec<u8>);
 
 /// Error types for network messages.
 pub mod error {
