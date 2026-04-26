@@ -18,8 +18,6 @@ use primitives::BlockHash;
 use units::block::{BlockHeightDecoder, BlockHeightEncoder};
 use units::BlockHeight;
 
-use crate::consensus::impl_consensus_encoding;
-
 #[rustfmt::skip]                // Keep public re-exports separate.
 #[doc(no_inline)]
 pub use self::error::{
@@ -48,26 +46,6 @@ impl FilterHash {
         FilterHeader(sha256d::Hash::from_engine(engine))
     }
 }
-
-#[rustfmt::skip]
-macro_rules! impl_hashencode {
-    ($hashtype:ident) => {
-        impl bitcoin::consensus::Encodable for $hashtype {
-            fn consensus_encode<W: bitcoin::io::Write + ?Sized>(&self, w: &mut W) -> core::result::Result<usize, bitcoin::io::Error> {
-                self.as_byte_array().consensus_encode(w)
-            }
-        }
-
-        impl bitcoin::consensus::Decodable for $hashtype {
-            fn consensus_decode<R: bitcoin::io::BufRead + ?Sized>(r: &mut R) -> core::result::Result<Self, bitcoin::consensus::encode::Error> {
-                Ok(Self::from_byte_array(<<$hashtype as hashes::Hash>::Bytes>::consensus_decode(r)?))
-            }
-        }
-    };
-}
-
-impl_hashencode!(FilterHash);
-impl_hashencode!(FilterHeader);
 
 encoding::encoder_newtype_exact! {
     /// Encoder type for [`FilterHash`].
@@ -237,8 +215,6 @@ impl encoding::Decodable for GetCFilters {
     }
 }
 
-impl_consensus_encoding!(GetCFilters, filter_type, start_height, stop_hash);
-
 /// cfilter message
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct CFilter {
@@ -317,8 +293,6 @@ impl encoding::Decodable for CFilter {
     }
 }
 
-impl_consensus_encoding!(CFilter, filter_type, block_hash, filter);
-
 /// getcfheaders message
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct GetCFHeaders {
@@ -384,8 +358,6 @@ impl encoding::Decodable for GetCFHeaders {
         ))
     }
 }
-
-impl_consensus_encoding!(GetCFHeaders, filter_type, start_height, stop_hash);
 
 /// cfheaders message
 #[derive(PartialEq, Eq, Clone, Debug)]
@@ -474,8 +446,6 @@ impl encoding::Decodable for CFHeaders {
     }
 }
 
-impl_consensus_encoding!(CFHeaders, filter_type, stop_hash, previous_filter_header, filter_hashes);
-
 /// getcfcheckpt message
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct GetCFCheckpt {
@@ -534,8 +504,6 @@ impl encoding::Decodable for GetCFCheckpt {
         GetCFCheckptDecoder(Decoder2::new(ArrayDecoder::new(), BlockHashDecoder::new()))
     }
 }
-
-impl_consensus_encoding!(GetCFCheckpt, filter_type, stop_hash);
 
 /// cfcheckpt message
 #[derive(PartialEq, Eq, Clone, Debug)]
@@ -614,8 +582,6 @@ impl encoding::Decodable for CFCheckpt {
         ))
     }
 }
-
-impl_consensus_encoding!(CFCheckpt, filter_type, stop_hash, filter_headers);
 
 /// Error types for client side block filtering messages.
 pub mod error {
