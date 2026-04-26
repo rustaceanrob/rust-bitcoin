@@ -9,17 +9,14 @@ use alloc::vec::Vec;
 
 #[cfg(feature = "arbitrary")]
 use arbitrary::{Arbitrary, Unstructured};
-use bitcoin::consensus::encode::{self, Decodable, Encodable};
 use encoding::{
     ArrayDecoder, ArrayEncoder, CompactSizeEncoder, Decoder2, Decoder3, Encoder2, Encoder3,
     SliceEncoder, VecDecoder,
 };
-use io::{BufRead, Write};
 use primitives::block::{BlockHashDecoder, BlockHashEncoder};
 use primitives::transaction::{Txid, Wtxid};
 use primitives::BlockHash;
 
-use crate::consensus::impl_consensus_encoding;
 use crate::{ProtocolVersion, ProtocolVersionDecoder, ProtocolVersionEncoder};
 
 #[rustfmt::skip]                // Keep public re-exports separate.
@@ -71,44 +68,6 @@ impl Inventory {
             Self::WitnessBlock(b) => Some(b.to_byte_array()),
             Self::Unknown { hash, .. } => Some(*hash),
         }
-    }
-}
-
-impl Encodable for Inventory {
-    #[inline]
-    fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, io::Error> {
-        macro_rules! encode_inv {
-            ($code:expr, $item:expr) => {
-                u32::consensus_encode(&$code, w)? + $item.consensus_encode(w)?
-            };
-        }
-        Ok(match *self {
-            Self::Error(ref e) => encode_inv!(0, e),
-            Self::Transaction(ref t) => encode_inv!(1, t),
-            Self::Block(ref b) => encode_inv!(2, b),
-            Self::CompactBlock(ref b) => encode_inv!(4, b),
-            Self::WTx(ref w) => encode_inv!(5, w),
-            Self::WitnessTransaction(ref t) => encode_inv!(0x4000_0001, t),
-            Self::WitnessBlock(ref b) => encode_inv!(0x4000_0002, b),
-            Self::Unknown { inv_type: t, hash: ref d } => encode_inv!(t, d),
-        })
-    }
-}
-
-impl Decodable for Inventory {
-    #[inline]
-    fn consensus_decode<R: BufRead + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
-        let inv_type: u32 = Decodable::consensus_decode(r)?;
-        Ok(match inv_type {
-            0 => Self::Error(Decodable::consensus_decode(r)?),
-            1 => Self::Transaction(Decodable::consensus_decode(r)?),
-            2 => Self::Block(Decodable::consensus_decode(r)?),
-            4 => Self::CompactBlock(Decodable::consensus_decode(r)?),
-            5 => Self::WTx(Decodable::consensus_decode(r)?),
-            0x4000_0001 => Self::WitnessTransaction(Decodable::consensus_decode(r)?),
-            0x4000_0002 => Self::WitnessBlock(Decodable::consensus_decode(r)?),
-            tp => Self::Unknown { inv_type: tp, hash: Decodable::consensus_decode(r)? },
-        })
     }
 }
 
@@ -231,20 +190,6 @@ impl From<Vec<BlockHash>> for BlockLocator {
 
 impl From<BlockLocator> for Vec<BlockHash> {
     fn from(locator: BlockLocator) -> Self { locator.0 }
-}
-
-impl Encodable for BlockLocator {
-    #[inline]
-    fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, io::Error> {
-        self.0.consensus_encode(w)
-    }
-}
-
-impl Decodable for BlockLocator {
-    #[inline]
-    fn consensus_decode<R: BufRead + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
-        Ok(Self(Decodable::consensus_decode(r)?))
-    }
 }
 
 type BlockLocatorInnerEncoder<'e> = Encoder2<CompactSizeEncoder, SliceEncoder<'e, BlockHash>>;
@@ -445,10 +390,6 @@ impl encoding::Decodable for GetHeadersMessage {
         ))
     }
 }
-
-impl_consensus_encoding!(GetBlocksMessage, version, locator_hashes, stop_hash);
-
-impl_consensus_encoding!(GetHeadersMessage, version, locator_hashes, stop_hash);
 
 /// Error types for blockdata messages.
 pub mod error {
