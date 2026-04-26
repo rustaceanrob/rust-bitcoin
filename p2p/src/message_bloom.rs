@@ -8,14 +8,10 @@ use alloc::vec::Vec;
 
 #[cfg(feature = "arbitrary")]
 use arbitrary::{Arbitrary, Unstructured};
-use bitcoin::consensus::{encode, Decodable, Encodable, ReadExt};
 use encoding::{
     ArrayDecoder, ArrayEncoder, ByteVecDecoder, BytesEncoder, CompactSizeEncoder, Decoder4,
     Encoder2, Encoder3,
 };
-use io::{BufRead, Write};
-
-use crate::consensus::impl_consensus_encoding;
 
 #[rustfmt::skip]                // Keep public re-exports separate.
 #[doc(no_inline)]
@@ -111,8 +107,6 @@ impl encoding::Decodable for FilterLoad {
     }
 }
 
-impl_consensus_encoding!(FilterLoad, filter, hash_funcs, tweak, flags);
-
 /// Bloom filter update flags
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum BloomFlags {
@@ -187,28 +181,6 @@ impl encoding::Decodable for BloomFlags {
     fn decoder() -> Self::Decoder { BloomFlagsDecoder(ArrayDecoder::new()) }
 }
 
-impl Encodable for BloomFlags {
-    fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, io::Error> {
-        w.write_all(&[match self {
-            Self::None => 0,
-            Self::All => 1,
-            Self::PubkeyOnly => 2,
-        }])?;
-        Ok(1)
-    }
-}
-
-impl Decodable for BloomFlags {
-    fn consensus_decode<R: BufRead + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
-        Ok(match r.read_u8()? {
-            0 => Self::None,
-            1 => Self::All,
-            2 => Self::PubkeyOnly,
-            _ => return Err(crate::consensus::parse_failed_error("unknown bloom flag")),
-        })
-    }
-}
-
 /// `filteradd` message updates the current filter with new data
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct FilterAdd {
@@ -263,8 +235,6 @@ impl encoding::Decodable for FilterAdd {
 
     fn decoder() -> Self::Decoder { FilterAddDecoder(FilterAddInnerDecoder::new()) }
 }
-
-impl_consensus_encoding!(FilterAdd, data);
 
 /// Error types for bloom filter messages.
 pub mod error {
