@@ -38,9 +38,9 @@ use core::fmt;
 use arbitrary::{Arbitrary, Unstructured};
 #[cfg(feature = "alloc")]
 use crypto::key::UntweakedPublicKey;
-use hashes::{hash_newtype, sha256t, sha256t_tag};
 #[cfg(feature = "alloc")]
 use hashes::HashEngine;
+use hashes::{hash_newtype, sha256t, sha256t_tag};
 use secp256k1::Scalar;
 
 /// Maximum depth of a Taproot tree script spend path.
