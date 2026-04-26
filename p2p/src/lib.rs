@@ -8,7 +8,6 @@
 #![warn(deprecated_in_future)]
 #![doc(test(attr(warn(unused))))]
 
-mod consensus;
 mod network_ext;
 
 #[cfg(feature = "std")]

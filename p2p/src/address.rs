@@ -5,20 +5,17 @@
 //! This module defines the structures and functions needed to encode
 //! network addresses in Bitcoin messages.
 
-use alloc::vec;
 use alloc::vec::Vec;
 use core::{fmt, iter};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, ToSocketAddrs};
 
 #[cfg(feature = "arbitrary")]
 use arbitrary::{Arbitrary, Unstructured};
-use bitcoin::consensus::encode::{self, Decodable, Encodable, ReadExt, WriteExt};
 use encoding::{
     ArrayDecoder, ArrayEncoder, ByteVecDecoder, BytesEncoder, CompactSizeEncoder,
     CompactSizeU64Decoder, Decoder2, Decoder4, Encoder2, Encoder4,
 };
 use internals::array::ArrayExt;
-use io::{BufRead, Read, Write};
 
 use crate::ServiceFlags;
 
@@ -78,46 +75,6 @@ impl Address {
             Ok(SocketAddr::V6(SocketAddrV6::new(ipv6, self.port, 0, 0)))
         }
     }
-}
-
-impl Encodable for Address {
-    #[inline]
-    fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, io::Error> {
-        let mut len = self.services.consensus_encode(w)?;
-
-        for word in &self.address {
-            w.write_all(&word.to_be_bytes())?;
-            len += 2;
-        }
-
-        w.write_all(&self.port.to_be_bytes())?;
-        len += 2;
-
-        Ok(len)
-    }
-}
-
-impl Decodable for Address {
-    #[inline]
-    fn consensus_decode<R: BufRead + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
-        Ok(Self {
-            services: Decodable::consensus_decode(r)?,
-            address: read_be_address(r)?,
-            port: u16::swap_bytes(Decodable::consensus_decode(r)?),
-        })
-    }
-}
-
-/// Reads a big-endian address from reader.
-fn read_be_address<R: Read + ?Sized>(r: &mut R) -> Result<[u16; 8], encode::Error> {
-    let mut address = [0u16; 8];
-    let mut buf = [0u8; 2];
-
-    for word in &mut address {
-        Read::read_exact(r, &mut buf)?;
-        *word = u16::from_be_bytes(buf);
-    }
-    Ok(address)
 }
 
 fn address_from_u8(s: [u8; 16]) -> [u16; 8] {
@@ -298,8 +255,6 @@ impl encoding::Decodable for AddrV1Message {
         ))
     }
 }
-
-crate::consensus::impl_consensus_encoding!(AddrV1Message, time, address);
 
 /// Supported networks for use in BIP-0155 addrv2 message
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -640,99 +595,6 @@ impl encoding::Decodable for AddrV2 {
     }
 }
 
-impl Encodable for AddrV2 {
-    fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, io::Error> {
-        fn encode_addr<W: Write + ?Sized>(
-            w: &mut W,
-            network: u8,
-            bytes: &[u8],
-        ) -> Result<usize, io::Error> {
-            Ok(network.consensus_encode(w)?
-                + crate::consensus::consensus_encode_with_size(bytes, w)?)
-        }
-        Ok(match *self {
-            Self::Ipv4(ref addr) => encode_addr(w, 1, &addr.octets())?,
-            Self::Ipv6(ref addr) => encode_addr(w, 2, &addr.octets())?,
-            Self::TorV3(ref bytes) => encode_addr(w, 4, bytes)?,
-            Self::I2p(ref bytes) => encode_addr(w, 5, bytes)?,
-            Self::Cjdns(ref addr) => encode_addr(w, 6, &addr.octets())?,
-            Self::Unknown(network, ref bytes) => encode_addr(w, network, bytes)?,
-        })
-    }
-}
-
-impl Decodable for AddrV2 {
-    fn consensus_decode<R: BufRead + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
-        let network_id = u8::consensus_decode(r)?;
-        let len = r.read_compact_size()?;
-        if len > 512 {
-            return Err(crate::consensus::parse_failed_error("IP must be <= 512 bytes"));
-        }
-        Ok(match network_id {
-            1 => {
-                if len != 4 {
-                    return Err(crate::consensus::parse_failed_error("invalid IPv4 address"));
-                }
-                let addr: [u8; 4] = Decodable::consensus_decode(r)?;
-                Self::Ipv4(Ipv4Addr::new(addr[0], addr[1], addr[2], addr[3]))
-            }
-            2 => {
-                if len != 16 {
-                    return Err(crate::consensus::parse_failed_error("invalid IPv6 address"));
-                }
-                let addr: [u16; 8] = read_be_address(r)?;
-                if addr[0..3] == ONION {
-                    return Err(crate::consensus::parse_failed_error(
-                        "OnionCat address sent with IPv6 network id",
-                    ));
-                }
-                if addr[0..6] == [0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF] {
-                    return Err(crate::consensus::parse_failed_error(
-                        "IPV4 wrapped address sent with IPv6 network id",
-                    ));
-                }
-                Self::Ipv6(Ipv6Addr::new(
-                    addr[0], addr[1], addr[2], addr[3], addr[4], addr[5], addr[6], addr[7],
-                ))
-            }
-
-            4 => {
-                if len != 32 {
-                    return Err(crate::consensus::parse_failed_error("invalid TorV3 address"));
-                }
-                let pubkey = Decodable::consensus_decode(r)?;
-                Self::TorV3(pubkey)
-            }
-            5 => {
-                if len != 32 {
-                    return Err(crate::consensus::parse_failed_error("invalid I2P address"));
-                }
-                let hash = Decodable::consensus_decode(r)?;
-                Self::I2p(hash)
-            }
-            6 => {
-                if len != 16 {
-                    return Err(crate::consensus::parse_failed_error("invalid CJDNS address"));
-                }
-                let addr: [u16; 8] = read_be_address(r)?;
-                // check the first byte for the CJDNS marker
-                if addr[0] >> 8 != 0xFC {
-                    return Err(crate::consensus::parse_failed_error("invalid CJDNS address"));
-                }
-                Self::Cjdns(Ipv6Addr::new(
-                    addr[0], addr[1], addr[2], addr[3], addr[4], addr[5], addr[6], addr[7],
-                ))
-            }
-            _ => {
-                // len already checked above to be <= 512
-                let mut addr = vec![0u8; len as usize];
-                r.read_slice(&mut addr)?;
-                Self::Unknown(network_id, addr)
-            }
-        })
-    }
-}
-
 /// Address received from BIP-0155 addrv2 message
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct AddrV2Message {
@@ -762,31 +624,6 @@ impl AddrV2Message {
             AddrV2::Cjdns(_) => Err(UnroutableAddressError::Cjdns),
             AddrV2::Unknown(_, _) => Err(UnroutableAddressError::Unknown),
         }
-    }
-}
-
-impl Encodable for AddrV2Message {
-    fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, io::Error> {
-        let mut len = 0;
-        len += self.time.consensus_encode(w)?;
-        len += w.emit_compact_size(self.services.to_u64())?;
-        len += self.addr.consensus_encode(w)?;
-
-        w.write_all(&self.port.to_be_bytes())?;
-        len += 2; // port u16 is two bytes.
-
-        Ok(len)
-    }
-}
-
-impl Decodable for AddrV2Message {
-    fn consensus_decode<R: BufRead + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
-        Ok(Self {
-            time: Decodable::consensus_decode(r)?,
-            services: ServiceFlags::from(r.read_compact_size()?),
-            addr: Decodable::consensus_decode(r)?,
-            port: u16::swap_bytes(Decodable::consensus_decode(r)?),
-        })
     }
 }
 
