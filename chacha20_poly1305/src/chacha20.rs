@@ -4,6 +4,9 @@
 
 use core::ops::BitXor;
 
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+mod neon;
+
 /// The first four words (32-bit) of the `ChaCha` stream cipher state are constants.
 const WORD_1: u32 = 0x6170_7865;
 const WORD_2: u32 = 0x3320_646e;
@@ -317,6 +320,10 @@ impl ChaCha20 {
             buffer
         };
 
+        // Consume as many 4-block runs as possible via a wide SIMD path where
+        // one is available; a no-op returning the input unchanged elsewhere.
+        let remaining_buffer = self.apply_wide_batches(remaining_buffer);
+
         // Process full blocks.
         let mut chunks = remaining_buffer.chunks_exact_mut(CHACHA_BLOCKSIZE);
         for chunk in &mut chunks {
@@ -356,6 +363,30 @@ impl ChaCha20 {
         self.block_count = block;
         self.seek_offset_bytes = 0;
     }
+
+    /// Fast path for multi-block SIMD batches in `apply_keystream`.
+    ///
+    /// Consumes as many complete 4-block runs as fit in `buffer` via the NEON
+    /// backend on little-endian aarch64, advancing `self.block_count`
+    /// accordingly. Returns the unconsumed tail (0 bytes on a perfect
+    /// multiple, otherwise up to `4 * CHACHA_BLOCKSIZE - 1` bytes) to be
+    /// handled by the per-block scalar loop.
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    #[inline(always)]
+    fn apply_wide_batches<'a>(&mut self, buffer: &'a mut [u8]) -> &'a mut [u8] {
+        let mut chunks = buffer.chunks_exact_mut(4 * CHACHA_BLOCKSIZE);
+        for chunk in &mut chunks {
+            neon::apply_4_blocks(chunk, &self.key, &self.nonce, self.block_count);
+            self.block_count += 4;
+        }
+        chunks.into_remainder()
+    }
+
+    /// Placeholder for targets without a wide SIMD backend.
+    #[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
+    #[inline(always)]
+    #[allow(clippy::unused_self)] // Signature matches the aarch64 variant.
+    fn apply_wide_batches<'a>(&mut self, buffer: &'a mut [u8]) -> &'a mut [u8] { buffer }
 }
 
 #[cfg(test)]
