@@ -204,6 +204,160 @@ pub(super) fn apply_4_blocks(chunk: &mut [u8; 4 * 64], key: &Key, nonce: &Nonce,
     }
 }
 
+// XOR eight consecutive `ChaCha20` blocks of keystream into two 256-byte
+// halves of a 512-byte buffer, starting at `start_block`. Same layout and
+// rotations as `apply_4_blocks`, just with two 4-block groups (`w*` and
+// `x*`) carried through the rounds in parallel to expose more independent
+// work to the NEON pipes.
+#[inline]
+#[allow(clippy::too_many_lines)]
+pub(super) fn apply_8_blocks(
+    chunk_lo: &mut [u8; 4 * 64],
+    chunk_hi: &mut [u8; 4 * 64],
+    key: &Key,
+    nonce: &Nonce,
+    start_block: u32,
+) {
+    // SAFETY: Neon intrinsics are gated by feature `neon`.
+    unsafe {
+        // Initial state values shared across all 8 blocks. Constants, key,
+        // and nonce broadcast the same way; only the counter differs
+        // between the two 4-block groups.
+        let init0 = aarch64::vdupq_n_u32(WORD_1);
+        let init1 = aarch64::vdupq_n_u32(WORD_2);
+        let init2 = aarch64::vdupq_n_u32(WORD_3);
+        let init3 = aarch64::vdupq_n_u32(WORD_4);
+        let init4 =
+            aarch64::vdupq_n_u32(u32::from_le_bytes([key.0[0], key.0[1], key.0[2], key.0[3]]));
+        let init5 =
+            aarch64::vdupq_n_u32(u32::from_le_bytes([key.0[4], key.0[5], key.0[6], key.0[7]]));
+        let init6 =
+            aarch64::vdupq_n_u32(u32::from_le_bytes([key.0[8], key.0[9], key.0[10], key.0[11]]));
+        let init7 = aarch64::vdupq_n_u32(u32::from_le_bytes([
+            key.0[12], key.0[13], key.0[14], key.0[15],
+        ]));
+        let init8 = aarch64::vdupq_n_u32(u32::from_le_bytes([
+            key.0[16], key.0[17], key.0[18], key.0[19],
+        ]));
+        let init9 = aarch64::vdupq_n_u32(u32::from_le_bytes([
+            key.0[20], key.0[21], key.0[22], key.0[23],
+        ]));
+        let init10 = aarch64::vdupq_n_u32(u32::from_le_bytes([
+            key.0[24], key.0[25], key.0[26], key.0[27],
+        ]));
+        let init11 = aarch64::vdupq_n_u32(u32::from_le_bytes([
+            key.0[28], key.0[29], key.0[30], key.0[31],
+        ]));
+        // Counter for the low group: [start, +1, +2, +3]; high group: [+4, +5, +6, +7].
+        let counter_lo: [u32; 4] = [
+            start_block,
+            start_block.wrapping_add(1),
+            start_block.wrapping_add(2),
+            start_block.wrapping_add(3),
+        ];
+        let counter_hi: [u32; 4] = [
+            start_block.wrapping_add(4),
+            start_block.wrapping_add(5),
+            start_block.wrapping_add(6),
+            start_block.wrapping_add(7),
+        ];
+        let init12_lo = aarch64::vld1q_u32(counter_lo.as_ptr());
+        let init12_hi = aarch64::vld1q_u32(counter_hi.as_ptr());
+        let init13 = aarch64::vdupq_n_u32(u32::from_le_bytes([
+            nonce.0[0], nonce.0[1], nonce.0[2], nonce.0[3],
+        ]));
+        let init14 = aarch64::vdupq_n_u32(u32::from_le_bytes([
+            nonce.0[4], nonce.0[5], nonce.0[6], nonce.0[7],
+        ]));
+        let init15 = aarch64::vdupq_n_u32(u32::from_le_bytes([
+            nonce.0[8],
+            nonce.0[9],
+            nonce.0[10],
+            nonce.0[11],
+        ]));
+
+        // Working state for the low group (blocks 0..3).
+        let (mut w0, mut w1, mut w2, mut w3) = (init0, init1, init2, init3);
+        let (mut w4, mut w5, mut w6, mut w7) = (init4, init5, init6, init7);
+        let (mut w8, mut w9, mut w10, mut w11) = (init8, init9, init10, init11);
+        let (mut w12, mut w13, mut w14, mut w15) = (init12_lo, init13, init14, init15);
+        // Working state for the high group (blocks 4..7).
+        let (mut x0, mut x1, mut x2, mut x3) = (init0, init1, init2, init3);
+        let (mut x4, mut x5, mut x6, mut x7) = (init4, init5, init6, init7);
+        let (mut x8, mut x9, mut x10, mut x11) = (init8, init9, init10, init11);
+        let (mut x12, mut x13, mut x14, mut x15) = (init12_hi, init13, init14, init15);
+
+        // 20 rounds. Each quarter-round position is applied to both groups
+        // in interleaved order so LLVM can spread independent work across
+        // the NEON pipes.
+        for _ in 0..10 {
+            // Column round.
+            quarter_round(&mut w0, &mut w4, &mut w8, &mut w12);
+            quarter_round(&mut x0, &mut x4, &mut x8, &mut x12);
+            quarter_round(&mut w1, &mut w5, &mut w9, &mut w13);
+            quarter_round(&mut x1, &mut x5, &mut x9, &mut x13);
+            quarter_round(&mut w2, &mut w6, &mut w10, &mut w14);
+            quarter_round(&mut x2, &mut x6, &mut x10, &mut x14);
+            quarter_round(&mut w3, &mut w7, &mut w11, &mut w15);
+            quarter_round(&mut x3, &mut x7, &mut x11, &mut x15);
+            // Diagonal round.
+            quarter_round(&mut w0, &mut w5, &mut w10, &mut w15);
+            quarter_round(&mut x0, &mut x5, &mut x10, &mut x15);
+            quarter_round(&mut w1, &mut w6, &mut w11, &mut w12);
+            quarter_round(&mut x1, &mut x6, &mut x11, &mut x12);
+            quarter_round(&mut w2, &mut w7, &mut w8, &mut w13);
+            quarter_round(&mut x2, &mut x7, &mut x8, &mut x13);
+            quarter_round(&mut w3, &mut w4, &mut w9, &mut w14);
+            quarter_round(&mut x3, &mut x4, &mut x9, &mut x14);
+        }
+
+        // Add the initial state back in for both groups.
+        w0 = aarch64::vaddq_u32(w0, init0);
+        x0 = aarch64::vaddq_u32(x0, init0);
+        w1 = aarch64::vaddq_u32(w1, init1);
+        x1 = aarch64::vaddq_u32(x1, init1);
+        w2 = aarch64::vaddq_u32(w2, init2);
+        x2 = aarch64::vaddq_u32(x2, init2);
+        w3 = aarch64::vaddq_u32(w3, init3);
+        x3 = aarch64::vaddq_u32(x3, init3);
+        w4 = aarch64::vaddq_u32(w4, init4);
+        x4 = aarch64::vaddq_u32(x4, init4);
+        w5 = aarch64::vaddq_u32(w5, init5);
+        x5 = aarch64::vaddq_u32(x5, init5);
+        w6 = aarch64::vaddq_u32(w6, init6);
+        x6 = aarch64::vaddq_u32(x6, init6);
+        w7 = aarch64::vaddq_u32(w7, init7);
+        x7 = aarch64::vaddq_u32(x7, init7);
+        w8 = aarch64::vaddq_u32(w8, init8);
+        x8 = aarch64::vaddq_u32(x8, init8);
+        w9 = aarch64::vaddq_u32(w9, init9);
+        x9 = aarch64::vaddq_u32(x9, init9);
+        w10 = aarch64::vaddq_u32(w10, init10);
+        x10 = aarch64::vaddq_u32(x10, init10);
+        w11 = aarch64::vaddq_u32(w11, init11);
+        x11 = aarch64::vaddq_u32(x11, init11);
+        w12 = aarch64::vaddq_u32(w12, init12_lo);
+        x12 = aarch64::vaddq_u32(x12, init12_hi);
+        w13 = aarch64::vaddq_u32(w13, init13);
+        x13 = aarch64::vaddq_u32(x13, init13);
+        w14 = aarch64::vaddq_u32(w14, init14);
+        x14 = aarch64::vaddq_u32(x14, init14);
+        w15 = aarch64::vaddq_u32(w15, init15);
+        x15 = aarch64::vaddq_u32(x15, init15);
+
+        // XOR the keystream into both halves, alternating groups so writes
+        // to the two independent 256-byte regions can pipeline.
+        xor_into(chunk_lo, 0, w0, w1, w2, w3);
+        xor_into(chunk_hi, 0, x0, x1, x2, x3);
+        xor_into(chunk_lo, 16, w4, w5, w6, w7);
+        xor_into(chunk_hi, 16, x4, x5, x6, x7);
+        xor_into(chunk_lo, 32, w8, w9, w10, w11);
+        xor_into(chunk_hi, 32, x8, x9, x10, x11);
+        xor_into(chunk_lo, 48, w12, w13, w14, w15);
+        xor_into(chunk_hi, 48, x12, x13, x14, x15);
+    }
+}
+
 // This function handles the final step of applying the keystream to the
 // ciphertext as outlined in the RFC: https://datatracker.ietf.org/doc/html/rfc7539#section-2.4.1
 //
@@ -270,7 +424,7 @@ mod tests {
     use hex::hex;
 
     use super::super::{ChaCha20, Key, Nonce};
-    use super::apply_4_blocks;
+    use super::{apply_4_blocks, apply_8_blocks};
 
     #[test]
     fn matches_single_block_processing() {
@@ -286,6 +440,34 @@ mod tests {
 
             let mut scalar_ks = [0u8; 4 * 64];
             for i in 0u32..4 {
+                let ks = cipher.get_keystream(start + i);
+                let base = i as usize * 64;
+                scalar_ks[base..base + 64].copy_from_slice(&ks);
+            }
+            assert_eq!(neon_ks, scalar_ks, "mismatch at start_block={}", start);
+        }
+    }
+
+    #[test]
+    fn matches_single_block_processing_8way() {
+        let key =
+            Key::new(hex!("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"));
+        let nonce = Nonce::new(hex!("000000090000004a00000000"));
+        let cipher = ChaCha20::new_from_block(key, nonce, 0);
+
+        // Compares the neon 8-block processing with the single block processing.
+        for start in [0u32, 1, 42, 1_000, u32::MAX - 7] {
+            let mut neon_ks = [0u8; 8 * 64];
+            let (lo, hi) = neon_ks.split_at_mut(4 * 64);
+            if let (Ok(chunk_lo), Ok(chunk_hi)) = (
+                <&mut [u8; 4 * 64]>::try_from(lo),
+                <&mut [u8; 4 * 64]>::try_from(hi),
+            ) {
+                apply_8_blocks(chunk_lo, chunk_hi, &key, &nonce, start);
+            }
+
+            let mut scalar_ks = [0u8; 8 * 64];
+            for i in 0u32..8 {
                 let ks = cipher.get_keystream(start + i);
                 let base = i as usize * 64;
                 scalar_ks[base..base + 64].copy_from_slice(&ks);

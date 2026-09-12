@@ -320,10 +320,30 @@ impl ChaCha20 {
             buffer
         };
 
-        // On aarch64, consume as many 4-block runs as possible via neon before
-        // falling through to the per-block loop.
+        // On aarch64, consume as many wide-batch NEON runs as possible before
+        // falling through to the per-block loop. Try 8-block batches first,
+        // then 4-block batches for the leftover.
         #[cfg(all(target_arch = "aarch64", target_endian = "little", target_feature = "neon"))]
         let remaining_buffer = {
+            let mut chunks = remaining_buffer.chunks_exact_mut(8 * CHACHA_BLOCKSIZE);
+            for chunk in &mut chunks {
+                let (lo, hi) = chunk.split_at_mut(4 * CHACHA_BLOCKSIZE);
+                if let (Ok(chunk_lo), Ok(chunk_hi)) = (
+                    <&mut [u8; 4 * CHACHA_BLOCKSIZE]>::try_from(lo),
+                    <&mut [u8; 4 * CHACHA_BLOCKSIZE]>::try_from(hi),
+                ) {
+                    neon::apply_8_blocks(
+                        chunk_lo,
+                        chunk_hi,
+                        &self.key,
+                        &self.nonce,
+                        self.block_count,
+                    );
+                    self.block_count += 8;
+                }
+            }
+            let remaining_buffer = chunks.into_remainder();
+
             let mut chunks = remaining_buffer.chunks_exact_mut(4 * CHACHA_BLOCKSIZE);
             for chunk in &mut chunks {
                 if let Ok(chunk) = <&mut [u8; 4 * CHACHA_BLOCKSIZE]>::try_from(chunk) {
